@@ -139,7 +139,7 @@ header{
 /* ===========================
    REQUIRED: SET YOUR RELAY URL
    =========================== */
-   const WS_URL = "wss://midimyface-relay.onrender.com/midimyface";
+   const WS_URL = "wss://midimyface-relay.onrender.com/ws";
 
 /* ============== CORE MAPS ============== */
 const GESTURE_FROM_CH = {1:"mouth",2:"smile",3:"leftWink",4:"rightWink",5:"noseX",6:"noseY"};
@@ -300,64 +300,143 @@ function updateGestureUI(id, g, value){
 }
 
 /* ============== TELEMETRY HANDLER ============== */
-function handleMessage(m){
-  if(m.type==='role'){ /* console remains controller; ignore */ return; }
-  if(m.type==='presence'){
-    const seen = new Set();
-    (m.participants||[]).forEach(pp=>{
-      const p = ensurePerf(pp.id, pp.name);
-      p.connected = !!pp.connected; renderCard(p);
-      seen.add(pp.id);
-    });
-    [...participants.keys()].forEach(id=>{ if(!seen.has(id)) removePerf(id); });
-    return;
-  }
-  if(m.type==='telemetry' && m.from){
-    const p = ensurePerf(m.from, m.name);
-    if(m.note){
-      const {on, note, vel=100, chIn=1} = m.note;
-      p.lastNote = {on, note, vel};
-      noteLED(p.id, on);
-      // note routing follows card-level mute/solo using mouth anchor
-      if(p.notesRoute && routable(p, "mouth")){
-        sendNote(on, note, vel, p.assignedOutChannel);
-      }
+// --- Relay → Console message mapping (HOST side) ---
+function handleRelayMessage(m){
+  switch (m.type) {
+    case "joined": {
+      // { data: { role:"host"|..., session_id, created } }
+      // Host ack; nothing to render.
+      return;
     }
-    if(m.cc){
-      const {channel, cc, value} = m.cc;
-      const g = GESTURE_FROM_CH[channel];
-      if(g){
-        p.gestures[g].value = value;
-        updateGestureUI(p.id, g, value);
-        if(routable(p,g)){ sendCC(cc, value, p.assignedOutChannel); }
-      }
+
+    // Roster & presence
+    case "session/roster": {
+      // m.data = [{ participant_id, name, channel }, ...] (performers only)
+      const ids = new Set();
+      (m.data || []).forEach(row => {
+        const id = row.participant_id;
+        const p  = ensurePerf(id, row.name);
+        p.connected = true;
+        if (row.channel) p.assignedOutChannel = row.channel; // optional
+        renderCard(p);
+        ids.add(id);
+      });
+      // Do not remove others here; roster is a snapshot
+      updateCount();
+      return;
     }
+    case "session/joined": {
+      // m.data = { participant_id, name, channel }
+      const d = m.data || {};
+      const p = ensurePerf(d.participant_id, d.name);
+      p.connected = true;
+      if (d.channel) p.assignedOutChannel = d.channel;
+      renderCard(p, true);
+      updateCount();
+      return;
+    }
+    case "session/left": {
+      // m.data = { participant_id, channel, name }
+      const d = m.data || {};
+      const p = participants.get(d.participant_id);
+      if (p) { p.connected = false; renderCard(p); }
+      updateCount();
+      return;
+    }
+
+    // Telemetry (performer → host)
+    case "midi/cc": {
+      // m.data = { from, channel, cc, value }
+      const d = m.data || {};
+      const perf = ensurePerf(d.from, d.name);
+      const gkey = GESTURE_FROM_CH[d.channel];
+      if (gkey) {
+        const val = (d.value|0);
+        perf.gestures[gkey].value = val;
+        updateGestureUI(perf.id, gkey, val);
+        if (routable(perf, gkey)) sendCC(d.cc|0, val, perf.assignedOutChannel);
+      }
+      return;
+    }
+    case "midi/note_on": {
+      // m.data = { from, note, vel, chIn? }
+      const d = m.data || {};
+      const perf = ensurePerf(d.from, d.name);
+      const note = d.note|0, vel = (d.vel|0)||100;
+      perf.lastNote = { on:true, note, vel };
+      noteLED(perf.id, true);
+      if (perf.notesRoute && routable(perf, "mouth")) {
+        sendNote(true, note, vel, perf.assignedOutChannel);
+      }
+      return;
+    }
+    case "midi/note_off": {
+      // m.data = { from, note, vel? }
+      const d = m.data || {};
+      const perf = ensurePerf(d.from, d.name);
+      const note = d.note|0, vel = (d.vel|0)||0;
+      noteLED(perf.id, false);
+      if (perf.notesRoute && routable(perf, "mouth")) {
+        sendNote(false, note, vel, perf.assignedOutChannel);
+      }
+      return;
+    }
+
+    // Optional: if server echoes channel changes to host
+    case "server/assigned": {
+      // m.data = { participant_id, channel }
+      const d = m.data || {};
+      const p = ensurePerf(d.participant_id);
+      if (d.channel) { p.assignedOutChannel = d.channel; renderCard(p); }
+      return;
+    }
+
+    default:
+      // Ignore unknown types
+      return;
   }
 }
 
 /* ============== WS CLIENT ============== */
 function connectWS(){
   setWS('connecting');
-  try{ ws = new WebSocket(WS_URL); }catch(e){ setWS('error'); setStatus('WS init failed'); return; }
+  try { ws = new WebSocket(WS_URL); }
+  catch(e){ setWS('error'); setStatus('WS init failed'); return; }
 
-  ws.onopen = ()=>{
+  ws.onopen = () => {
     setWS('connected'); setRTT(null);
-    ws.send(JSON.stringify({ type:"join", sessionId, password, name:"Console" }));
+
+    // Identify this client as the HOST (console)
+    ws.send(JSON.stringify({
+      type: "hello",
+      session_id: sessionId,      // from your input
+      password:  password || "",  // from your input (if set on server)
+      role: "host",
+      name: "Console",
+      client_uuid: null           // optional stable id; set if you want stickiness
+    }));
+
+    // Heartbeat expected by your relay
     clearInterval(pingTimer);
-    pingTimer = setInterval(()=>{
+    pingTimer = setInterval(() => {
       lastPing = performance.now();
-      try{ ws.send(JSON.stringify({type:"ping", tClient:Date.now()})); }catch{}
+      try {
+        ws.send(JSON.stringify({ type: "system/ping", data: { t: Date.now() } }));
+      } catch {}
     }, 5000);
   };
-  ws.onmessage = (ev)=>{
+
+  ws.onmessage = (ev) => {
     tpIn++;
-    let m=null; try{ m=JSON.parse(ev.data||"{}"); }catch{ return; }
-    if(m.type==='pong'){ setRTT(performance.now()-lastPing); return; }
-    handleMessage(m);
+    let m = null; try { m = JSON.parse(ev.data || "{}"); } catch { return; }
+    if (m.type === "system/pong") { setRTT(performance.now() - lastPing); return; }
+    handleRelayMessage(m); // <- use the mapping for session/* and midi/* events
   };
-  ws.onerror = ()=>{ setWS('error'); };
-  ws.onclose = ()=>{ setWS('disconnected'); clearInterval(pingTimer); };
+
+  ws.onerror = () => { setWS('error'); };
+  ws.onclose  = () => { setWS('disconnected'); clearInterval(pingTimer); };
 }
+
 
 /* ============== MIDI ============== */
 function midiInit(){
