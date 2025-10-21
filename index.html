@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>MIDImyFACE Console</title>
+<style>
+/* ===========================
+  CONSOLE
+   =========================== */
+:root{
+  --bg:#041a3a;           /* deep CRT blue */
+  --fg:#bfe8ff;           /* dim cyan text */
+  --hi:#00ffd5;           /* highlight cyan-green */
+  --dim:#7fb3ff;          /* muted labels */
+  --line:#0b2f63;         /* box edges */
+  --led-ok:#12e07d;
+  --led-bad:#ff5670;
+  --led-warn:#ffd44a;
+}
+html,body{height:100%}
+body{
+  margin:0; background:var(--bg); color:var(--fg);
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  letter-spacing:.2px; -webkit-font-smoothing:antialiased;
+}
+header{
+  padding:10px 12px; border-bottom:1px solid var(--line);
+  display:flex; align-items:center; gap:10px;
+}
+.hbrand{color:var(--hi); font-weight:700}
+.hsub{color:var(--dim); font-size:12px}
+.box{
+  border:1px solid var(--line);
+}
+.btn, select, input{
+  background:#07224a; color:var(--fg); border:1px solid var(--line);
+  padding:8px 10px; font-family:inherit; font-size:14px;
+}
+.btn{cursor:pointer}
+.btn:focus, input:focus, select:focus{outline:1px solid var(--hi)}
+.kv{display:flex; align-items:center; gap:6px; padding:6px 8px; border:1px solid var(--line)}
+.k{color:var(--dim); font-size:12px}
+.v{font-weight:700}
+.grid{display:grid; gap:10px}
+.hidden{display:none !important}
+.wrap{max-width:1100px; margin:0 auto; padding:12px}
+.center{max-width:520px; margin:40px auto}
+.row{display:flex; gap:8px; flex-wrap:wrap; align-items:center}
+.grow{flex:1}
+.led{width:10px;height:10px;border-radius:50%;background:#2b4b87;display:inline-block}
+.led.ok{background:var(--led-ok)}
+.led.warn{background:var(--led-warn)}
+.led.bad{background:var(--led-bad)}
+.hr{height:1px;background:var(--line);margin:10px 0}
+
+/* Cards minimal */
+.rack{display:grid; gap:8px; grid-template-columns:repeat(auto-fill,minmax(270px,1fr));}
+.card{padding:8px}
+.ct{display:flex; align-items:center; gap:8px; margin-bottom:6px}
+.ct .nm{font-weight:700}
+.small{font-size:12px; color:var(--dim)}
+.badge{border:1px solid var(--line); padding:2px 6px; font-size:12px}
+.mini{font-size:12px}
+.rowx{display:flex; gap:6px; align-items:center}
+.gbox{border:1px dashed var(--line); padding:6px}
+.gname{display:flex; justify-content:space-between; align-items:center; font-size:12px; color:var(--dim)}
+.meter{height:6px; background:#05224a; border:1px solid var(--line); margin-top:4px}
+.mbar{height:100%; width:0%; background:linear-gradient(90deg,var(--hi),#23ff8a)}
+.togs{display:flex; gap:4px; margin-top:6px}
+.tog{padding:3px 6px; border:1px solid var(--line); background:#062149; color:var(--fg); cursor:pointer; font-size:12px}
+.tog.active{outline:1px solid var(--hi)}
+.noteled{width:9px;height:9px;background:#203b72;display:inline-block}
+.noteled.on{background:var(--hi)}
+.warnbar{border:1px solid var(--line); padding:6px 8px; color:var(--led-warn)}
+</style>
+</head>
+<body>
+<header class="wrap">
+  <div class="hbrand">MIDImyFACE Console</div>
+  <div class="grow"></div>
+  <div class="kv"><span class="k">WS</span><span id="kvWS" class="v small">disconnected</span><span id="ledWS" class="led"></span></div>
+  <div class="kv"><span class="k">RTT</span><span id="kvRTT" class="v small">—</span></div>
+</header>
+
+<!-- AUTH -->
+<section id="auth" class="wrap center box" style="padding:12px">
+  <div class="grid" style="grid-template-columns:1fr 1fr">
+    <div>
+      <div class="k">Session ID</div>
+      <input id="sid" placeholder="e.g. abc123" />
+    </div>
+    <div>
+      <div class="k">Password</div>
+      <input id="pwd" type="password" placeholder="optional" />
+    </div>
+  </div>
+  <div class="row" style="margin-top:10px">
+    <div class="grow"></div>
+    <button id="join" class="btn">JOIN NOW</button>
+  </div>
+</section>
+
+<!-- MAIN -->
+<section id="main" class="wrap hidden">
+  <div class="box" style="padding:8px">
+    <div class="row">
+      <div class="kv"><span class="k">Session</span><span id="kvSession" class="v">—</span></div>
+      <div class="kv"><span class="k">Participants</span><span id="kvCount" class="v">0</span></div>
+
+      <div class="grow"></div>
+
+      <div class="kv">
+        <span class="k">MIDI Out</span>
+        <select id="midiOut"></select>
+      </div>
+      <button id="ping" class="btn mini">PING</button>
+      <button id="panic" class="btn mini">PANIC</button>
+    </div>
+  </div>
+
+  <div class="hr"></div>
+
+  <div id="warn" class="warnbar hidden">Web MIDI unavailable. Use Chrome/Edge and select a virtual MIDI port (IAC / loopMIDI).</div>
+
+  <div id="rack" class="rack"></div>
+
+  <div class="hr"></div>
+
+  <div class="row small">
+    <div>In: <b id="tpIn">0</b>/s</div>
+    <div>Out: <b id="tpOut">0</b>/s</div>
+    <div class="grow"></div>
+    <div id="status" class="small">ready</div>
+  </div>
+</section>
+
+<script>
+/* ===========================
+   REQUIRED: SET YOUR RELAY URL
+   =========================== */
+   const WS_URL = "wss://midimyface-relay.onrender.com/midimyface";
+
+/* ============== CORE MAPS ============== */
+const GESTURE_FROM_CH = {1:"mouth",2:"smile",3:"leftWink",4:"rightWink",5:"noseX",6:"noseY"};
+const GESTURE_LABEL   = {mouth:"Mouth",smile:"Smile",leftWink:"Left Wink",rightWink:"Right Wink",noseX:"Nose X",noseY:"Nose Y"};
+const ALL_GESTURES    = ["mouth","smile","leftWink","rightWink","noseX","noseY"];
+
+const el = id => document.getElementById(id);
+const $auth = el('auth');
+const $main = el('main');
+const $rack = el('rack');
+
+function clamp(v,min,max){ return Math.max(min,Math.min(max,v)); }
+
+/* ============== STATE ============== */
+let ws=null, wsConnected=false, pingTimer=null, lastPing=0;
+let sessionId="", password="";
+let participants = new Map(); // id -> performer state
+
+// MIDI
+let midi=null, midiOut=null;
+let tpIn=0, tpOut=0;
+setInterval(()=>{ el('tpIn').textContent = tpIn; el('tpOut').textContent = tpOut; tpIn=0; tpOut=0; },1000);
+
+/* ============== UI BITS ============== */
+function setWS(state){
+  wsConnected = (state==='connected');
+  el('kvWS').textContent = state;
+  el('ledWS').className = 'led ' + (state==='connected'?'ok': state==='connecting'?'warn' : state==='error'?'bad':'');
+}
+function setRTT(ms){ el('kvRTT').textContent = ms? (ms|0)+' ms' : '—'; }
+function setStatus(s){ el('status').textContent = s; }
+function updateCount(){ el('kvCount').textContent = [...participants.values()].filter(p=>p.connected).length; }
+
+/* ============== MODEL ============== */
+function makePerformer(id, name){
+  const gestures={}; ALL_GESTURES.forEach(g=> gestures[g]={value:0, route:true, mute:false, solo:false});
+  return { id, name, connected:true, assignedOutChannel:1, mute:false, solo:false, notesRoute:true, gestures, lastNote:{on:false,note:0,vel:0} };
+}
+function ensurePerf(id, name){
+  if(!participants.has(id)){
+    const p = makePerformer(id, name||("P-"+id));
+    participants.set(id,p); renderCard(p,true); updateCount();
+  }
+  return participants.get(id);
+}
+function removePerf(id){
+  participants.delete(id);
+  const node = document.querySelector(`[data-id="${id}"]`); if(node) node.remove();
+  updateCount();
+}
+
+/* ============== ROUTING ============== */
+function anySolo(){
+  for(const p of participants.values()){
+    if(p.solo) return true;
+    for(const g of Object.values(p.gestures)) if(g.solo) return true;
+  }
+  return false;
+}
+function routable(p,g){
+  const gg=p.gestures[g]; if(p.mute||gg.mute) return false;
+  const solo=anySolo();
+  if(solo) return (p.solo||gg.solo) && gg.route;
+  return gg.route;
+}
+function st(base,ch){ return (base | ((clamp(ch,1,16)-1)&0x0F)); }
+function sendNote(on,n,vel,ch){
+  if(!midiOut) return;
+  midiOut.send([ st(on?0x90:0x80,ch), clamp(n,0,127), clamp(vel,0,127) ]); tpOut++;
+}
+function sendCC(cc,val,ch){
+  if(!midiOut) return;
+  midiOut.send([ st(0xB0,ch), clamp(cc,0,127), clamp(val,0,127) ]); tpOut++;
+}
+
+/* ============== RENDER ============== */
+function renderCard(p, fresh=false){
+  let card = document.querySelector(`[data-id="${p.id}"]`);
+  if(!card){
+    card = document.createElement('div');
+    card.className = 'card box';
+    card.dataset.id = p.id;
+    card.innerHTML = `
+      <div class="ct">
+        <span class="led ${p.connected?'ok':''}" data-led></span>
+        <span class="nm">${p.name||p.id}</span>
+        <span class="grow"></span>
+        <span class="badge">ChOut</span>
+        <select data-ch>
+          ${Array.from({length:16},(_,i)=>`<option value="${i+1}">${i+1}</option>`).join('')}
+        </select>
+        <span class="badge">Note</span>
+        <span class="noteled" data-noteled></span>
+        <button class="tog" data-notes>Route</button>
+        <button class="tog" data-m>M</button>
+        <button class="tog" data-s>S</button>
+      </div>
+      <div class="grid" style="grid-template-columns:1fr 1fr 1fr; gap:6px">
+        ${ALL_GESTURES.map(g=>`
+          <div class="gbox">
+            <div class="gname"><span>${GESTURE_LABEL[g]}</span><span class="led" data-ledg="${g}"></span></div>
+            <div class="meter"><div class="mbar" data-bar="${g}" style="width:0%"></div></div>
+            <div class="rowx">
+              <button class="tog" data-r="${g}">Route</button>
+              <button class="tog" data-gm="${g}">M</button>
+              <button class="tog" data-gs="${g}">S</button>
+              <div class="small">v=<span data-v="${g}">0</span></div>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    `;
+    $rack.appendChild(card);
+
+    // wire
+    const chSel = card.querySelector('[data-ch]');
+    const btnNotes = card.querySelector('[data-notes]');
+    const btnM = card.querySelector('[data-m]');
+    const btnS = card.querySelector('[data-s]');
+    chSel.value = p.assignedOutChannel;
+    btnNotes.classList.toggle('active', p.notesRoute);
+    btnM.classList.toggle('active', p.mute);
+    btnS.classList.toggle('active', p.solo);
+
+    chSel.onchange = ()=>{ p.assignedOutChannel = parseInt(chSel.value,10)||1; };
+    btnNotes.onclick = ()=>{ p.notesRoute=!p.notesRoute; btnNotes.classList.toggle('active',p.notesRoute); };
+    btnM.onclick = ()=>{ p.mute=!p.mute; btnM.classList.toggle('active',p.mute); };
+    btnS.onclick = ()=>{ p.solo=!p.solo; btnS.classList.toggle('active',p.solo); };
+
+    ALL_GESTURES.forEach(g=>{
+      const r = card.querySelector(`[data-r="${g}"]`);
+      const gm= card.querySelector(`[data-gm="${g}"]`);
+      const gs= card.querySelector(`[data-gs="${g}"]`);
+      r.classList.toggle('active', p.gestures[g].route);
+      gm.classList.toggle('active', p.gestures[g].mute);
+      gs.classList.toggle('active', p.gestures[g].solo);
+      r.onclick = ()=>{ p.gestures[g].route=!p.gestures[g].route; r.classList.toggle('active',p.gestures[g].route); };
+      gm.onclick = ()=>{ p.gestures[g].mute=!p.gestures[g].mute; gm.classList.toggle('active',p.gestures[g].mute); };
+      gs.onclick = ()=>{ p.gestures[g].solo=!p.gestures[g].solo; gs.classList.toggle('active',p.gestures[g].solo); };
+    });
+  }
+  // live bits
+  card.querySelector('[data-led]').className = 'led ' + (p.connected?'ok':'');
+}
+
+function noteLED(id, on){
+  const card = document.querySelector(`[data-id="${id}"]`);
+  if(!card) return;
+  const n = card.querySelector('[data-noteled]');
+  if(on){ n.classList.add('on'); setTimeout(()=>n.classList.remove('on'),120); }
+}
+
+function updateGestureUI(id, g, value){
+  const card = document.querySelector(`[data-id="${id}"]`); if(!card) return;
+  (card.querySelector(`[data-bar="${g}"]`)||{}).style && (card.querySelector(`[data-bar="${g}"]`).style.width = (clamp(value,0,127)/127*100)+'%');
+  const vEl = card.querySelector(`[data-v="${g}"]`); if(vEl) vEl.textContent = clamp(value,0,127);
+  const ledg = card.querySelector(`[data-ledg="${g}"]`); if(ledg){ ledg.className='led ok'; setTimeout(()=>ledg.className='led',80); }
+}
+
+/* ============== TELEMETRY HANDLER ============== */
+function handleMessage(m){
+  if(m.type==='role'){ /* console remains controller; ignore */ return; }
+  if(m.type==='presence'){
+    const seen = new Set();
+    (m.participants||[]).forEach(pp=>{
+      const p = ensurePerf(pp.id, pp.name);
+      p.connected = !!pp.connected; renderCard(p);
+      seen.add(pp.id);
+    });
+    [...participants.keys()].forEach(id=>{ if(!seen.has(id)) removePerf(id); });
+    return;
+  }
+  if(m.type==='telemetry' && m.from){
+    const p = ensurePerf(m.from, m.name);
+    if(m.note){
+      const {on, note, vel=100, chIn=1} = m.note;
+      p.lastNote = {on, note, vel};
+      noteLED(p.id, on);
+      // note routing follows card-level mute/solo using mouth anchor
+      if(p.notesRoute && routable(p, "mouth")){
+        sendNote(on, note, vel, p.assignedOutChannel);
+      }
+    }
+    if(m.cc){
+      const {channel, cc, value} = m.cc;
+      const g = GESTURE_FROM_CH[channel];
+      if(g){
+        p.gestures[g].value = value;
+        updateGestureUI(p.id, g, value);
+        if(routable(p,g)){ sendCC(cc, value, p.assignedOutChannel); }
+      }
+    }
+  }
+}
+
+/* ============== WS CLIENT ============== */
+function connectWS(){
+  setWS('connecting');
+  try{ ws = new WebSocket(WS_URL); }catch(e){ setWS('error'); setStatus('WS init failed'); return; }
+
+  ws.onopen = ()=>{
+    setWS('connected'); setRTT(null);
+    ws.send(JSON.stringify({ type:"join", sessionId, password, name:"Console" }));
+    clearInterval(pingTimer);
+    pingTimer = setInterval(()=>{
+      lastPing = performance.now();
+      try{ ws.send(JSON.stringify({type:"ping", tClient:Date.now()})); }catch{}
+    }, 5000);
+  };
+  ws.onmessage = (ev)=>{
+    tpIn++;
+    let m=null; try{ m=JSON.parse(ev.data||"{}"); }catch{ return; }
+    if(m.type==='pong'){ setRTT(performance.now()-lastPing); return; }
+    handleMessage(m);
+  };
+  ws.onerror = ()=>{ setWS('error'); };
+  ws.onclose = ()=>{ setWS('disconnected'); clearInterval(pingTimer); };
+}
+
+/* ============== MIDI ============== */
+function midiInit(){
+  if(!('requestMIDIAccess' in navigator)){ el('warn').classList.remove('hidden'); return; }
+  navigator.requestMIDIAccess({sysex:false,software:true})
+    .then(access=>{ midi=access; midi.onstatechange=buildOuts; buildOuts(); })
+    .catch(()=> el('warn').classList.remove('hidden'));
+}
+function buildOuts(){
+  const sel = el('midiOut'); sel.innerHTML='';
+  const outs = Array.from(midi.outputs.values()).filter(o=>o.state==='connected');
+  const ph = new Option('Select Output…',''); ph.disabled=true; ph.selected=true; sel.add(ph);
+  outs.forEach(o=> sel.add(new Option(o.name, o.id)));
+  const pref = outs.find(o=>/loopmidi|iac|blackhole|virtual|rtpmidi|bus/i.test(o.name)) || outs[0];
+  if(!midiOut && pref){ midiOut = pref; sel.value = pref.id; }
+  sel.onchange = ()=>{ midiOut = midi.outputs.get(sel.value)||null; };
+}
+el('ping').onclick = ()=>{
+  if(!midiOut){ setStatus('Select MIDI out'); return; }
+  sendNote(true,60,100,1); setTimeout(()=>sendNote(false,60,0,1),120);
+};
+el('panic').onclick = ()=>{
+  if(!midiOut){ setStatus('Select MIDI out'); return; }
+  for(let ch=1; ch<=16; ch++){
+    midiOut.send([st(0xB0,ch),123,0]); tpOut++;
+    midiOut.send([st(0xB0,ch),120,0]); tpOut++;
+    for(let n=0;n<128;n++){ midiOut.send([st(0x80,ch),n,0]); tpOut++; }
+  }
+  setStatus('panic sent');
+};
+
+/* ============== WIREFRAME ============== */
+el('join').onclick = ()=>{
+  sessionId = el('sid').value.trim() || Math.random().toString(36).slice(2,8);
+  password = el('pwd').value;
+  el('kvSession').textContent = sessionId;
+  $auth.classList.add('hidden'); $main.classList.remove('hidden');
+  connectWS();
+};
+
+midiInit();
+</script>
+</body>
+</html>
