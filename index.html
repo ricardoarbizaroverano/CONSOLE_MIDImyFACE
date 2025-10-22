@@ -419,6 +419,9 @@ function connectWS(){
 
   ws.onopen = () => {
     setWS('connected'); setRTT(null);
+reconnectAttempts = 0;
+clearTimeout(reconnectTimer);
+
 
     // Identify this client as the HOST (console)
     ws.send(JSON.stringify({
