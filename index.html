@@ -139,7 +139,8 @@ header{
 /* ===========================
    REQUIRED: SET YOUR RELAY URL
    =========================== */
-   const WS_URL = "wss://midimyface-relay.onrender.com/ws";
+   const RELAY_URL_DEFAULT = "wss://midimyface-relay.onrender.com/ws";
+
 
 /* ============== CORE MAPS ============== */
 const GESTURE_FROM_CH = {1:"mouth",2:"smile",3:"leftWink",4:"rightWink",5:"noseX",6:"noseY"};
@@ -156,6 +157,7 @@ function clamp(v,min,max){ return Math.max(min,Math.min(max,v)); }
 /* ============== STATE ============== */
 let ws=null, wsConnected=false, pingTimer=null, lastPing=0;
 let sessionId="", password="";
+let reconnectTimer=null, reconnectAttempts=0, shouldStayConnected=false;
 let participants = new Map(); // id -> performer state
 
 // MIDI
@@ -358,6 +360,18 @@ function handleRelayMessage(m){
       }
       return;
     }
+    case "gesture/update": {
+      // m.data = { from, name, value }  name ∈ ["mouth","smile","leftWink","rightWink","noseX","noseY"]
+      const d = m.data || {};
+      const perf = ensurePerf(d.from, d.name);
+      const gkey = d.name;
+      if (ALL_GESTURES.includes(gkey)) {
+        const val = (d.value|0);
+        perf.gestures[gkey].value = val;
+        updateGestureUI(perf.id, gkey, val);
+      }
+      return;
+    }
     case "midi/note_on": {
       // m.data = { from, note, vel, chIn? }
       const d = m.data || {};
@@ -400,7 +414,7 @@ function handleRelayMessage(m){
 /* ============== WS CLIENT ============== */
 function connectWS(){
   setWS('connecting');
-  try { ws = new WebSocket(WS_URL); }
+  try { ws = new WebSocket(RELAY_URL_DEFAULT); }
   catch(e){ setWS('error'); setStatus('WS init failed'); return; }
 
   ws.onopen = () => {
@@ -434,7 +448,15 @@ function connectWS(){
   };
 
   ws.onerror = () => { setWS('error'); };
-  ws.onclose  = () => { setWS('disconnected'); clearInterval(pingTimer); };
+ws.onclose  = () => {
+  setWS('disconnected');
+  clearInterval(pingTimer);
+  if (shouldStayConnected) {
+    const delay = Math.min(10000, 1000 * Math.pow(2, reconnectAttempts++)); // 1s→2s→4s… (max 10s)
+    clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(() => connectWS(), delay);
+  }
+};
 }
 
 
@@ -474,6 +496,7 @@ el('join').onclick = ()=>{
   password = el('pwd').value;
   el('kvSession').textContent = sessionId;
   $auth.classList.add('hidden'); $main.classList.remove('hidden');
+  shouldStayConnected = true;
   connectWS();
 };
 
