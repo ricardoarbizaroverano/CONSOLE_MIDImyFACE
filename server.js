@@ -41,9 +41,11 @@ function presenceMsg(sid, session) {
 }
 
 function join(ws, data, query) {
-  const sid = data.sessionId || query.session || "default";
+  const sid = data.session_id || data.sessionId || query.session || "default";
   const name = data.name || "Performer";
+  const role = (data.role === "director" || data.role === "host") ? "director" : "performer";
   const pwd = data.password || "";
+  const client_uuid = data.client_uuid || null;
 
   if (RELAY_PASSWORD && pwd !== RELAY_PASSWORD) {
     try { ws.close(1008, "bad password"); } catch {}
@@ -55,38 +57,56 @@ function join(ws, data, query) {
   ws._id = crypto.randomUUID();
   ws._sid = sid;
   ws._name = name;
-  session.participants.set(ws._id, { id:ws._id, name, connected:true });
-  assignDirector(session);
+  ws._role = role;
+  ws._client_uuid = client_uuid;
 
-  if (session.director !== ws) json(ws, { type:"role", role:"performer" });
+  session.participants.set(ws._id, { id: ws._id, name, connected: true });
+
+  if (role === "director") {
+    session.director = ws;
+    json(ws, { type: "role", role: "director" });
+  } else {
+    assignDirector(session);
+    if (session.director !== ws) json(ws, { type: "role", role: "performer" });
+  }
+
   broadcast(session, presenceMsg(sid, session));
 }
+
 
 function relayTelemetry(ws, data) {
   const sid = ws._sid;
   const session = sessions.get(sid);
   if (!session) return;
   const from = ws._id;
-  const msg = { type:"telemetry", from };
+  const name = ws._name;
+
+  const msg = { type: "telemetry", from, name };
 
   if (data.note) {
     const n = data.note;
     msg.note = {
-      on: !!n.on, note:+n.note||0, vel:+n.vel||0, chIn:n.chIn?+n.chIn:undefined
+      on: !!n.on, note: +n.note || 0, vel: +n.vel || 0, chIn: n.chIn ? +n.chIn : undefined
     };
   }
   if (data.cc) {
     const c = data.cc;
     msg.cc = {
-      channel:+c.channel||1, cc:+c.cc||11, value:+c.value||0
+      channel: +c.channel || 1, cc: +c.cc || 11, value: +c.value || 0
     };
   }
 
-  // relay to all in session (or only director if desired)
-  session.clients.forEach(c => {
-    if (c.readyState !== 1) return;
-    json(c, msg);
-  });
+  session.clients.forEach(c => { if (c.readyState === 1) json(c, msg); });
+}
+
+function relayEvent(ws, type, data) {
+  const sid = ws._sid;
+  const session = sessions.get(sid);
+  if (!session) return;
+  const from = ws._id;
+  const name = ws._name;
+  const payload = { type, from, name, data, tServer: Date.now() };
+  session.clients.forEach(c => { if (c.readyState === 1) json(c, payload); });
 }
 
 function close(ws) {
@@ -121,20 +141,35 @@ setInterval(() => {
 // upgrade handler
 server.on("upgrade", (req, socket, head) => {
   const { pathname, query } = url.parse(req.url, true);
-  if (pathname !== "/" && pathname !== "/midimyface") {
+  if (pathname !== "/ws" && pathname !== "/" && pathname !== "/midimyface") {
     socket.destroy(); return;
   }
+  
   wss.handleUpgrade(req, socket, head, ws => {
     startHeartbeat(ws);
     ws.on("message", raw => {
       let msg=null; try{ msg=JSON.parse(raw.toString()); }catch{return;}
       if (!msg || typeof msg!=="object") return;
-      switch(msg.type){
-        case "join": join(ws,msg,query); break;
-        case "telemetry": relayTelemetry(ws,msg); break;
-        case "ping": json(ws,{type:"pong",tServer:Date.now()}); break;
+      switch (msg.type) {
+        case "join": join(ws, msg, query); break;
+        case "telemetry": relayTelemetry(ws, msg); break;
+      
+        // New pass-throughs from the client UI
+        case "midi/cc":
+        case "midi/note_on":
+        case "midi/note_off":
+        case "gesture/update":
+        case "percussion/trigger":
+        case "envelope/update":
+        case "mode/change":
+          relayEvent(ws, msg.type, msg.data || {}); break;
+      
+        case "system/ping":
+        case "ping":
+          json(ws, { type: msg.type === "ping" ? "pong" : "system/pong", tServer: Date.now() }); break;
+      
         default: break;
-      }
+      }      
     });
     ws.on("close", ()=> close(ws));
   });
