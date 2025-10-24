@@ -50,6 +50,8 @@ header{padding:10px 12px;border-bottom:1px solid var(--line);display:flex;align-
 .noteled{width:9px;height:9px;background:#203b72;display:inline-block}
 .noteled.on{background:var(--hi)}
 .warnbar{border:1px solid var(--line);padding:6px 8px;color:var(--led-warn)}
+/* highlight the routed gesture inside a performer card */
+.gbox.active{ outline:1px solid var(--hi); border-radius:6px; }
 </style>
 </head>
 <body>
@@ -80,10 +82,25 @@ header{padding:10px 12px;border-bottom:1px solid var(--line);display:flex;align-
       <div class="grow"></div>
       <div class="kv"><span class="k">MIDI Out (Notes)</span><select id="midiOutNotes"></select></div>
       <div class="kv"><span class="k">CC Out</span><select id="midiOutCC"></select></div>
+
+      <!-- Route gesture (global override for CC source) -->
+      <div class="kv">
+        <span class="k">Route gesture</span>
+        <select id="routeGestureSelect">
+          <option value="mouth">Mouth</option>
+          <option value="smile">Smile</option>
+          <option value="leftWink">Left Wink</option>
+          <option value="rightWink">Right Wink</option>
+          <option value="noseX">Nose X</option>
+          <option value="noseY">Nose Y</option>
+        </select>
+      </div>
+
       <button id="ping" class="btn mini">PING</button>
       <button id="panic" class="btn mini">PANIC</button>
     </div>
   </div>
+
   <div class="hr"></div>
   <div id="warn" class="warnbar hidden">Web MIDI unavailable. Use Chrome/Edge and select a virtual MIDI port (IAC / loopMIDI).</div>
   <div id="rack" class="rack"></div>
@@ -115,27 +132,37 @@ const INSTRUMENTS = {
 };
 function midiToNoteName(n){ const N=["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];const o=Math.floor(n/12)-1,i=n%12;return N[i]+o; }
 
-/* ===== Gesture maps ===== */
+/* ===== Gesture maps & labels (Console side) ===== */
 const GESTURE_FROM_CH = {1:"mouth",2:"smile",3:"leftWink",4:"rightWink",5:"noseX",6:"noseY"};
 const GESTURE_LABEL   = {mouth:"Mouth",smile:"Smile",leftWink:"Left Wink",rightWink:"Right Wink",noseX:"Nose X",noseY:"Nose Y"};
 const ALL_GESTURES    = ["mouth","smile","leftWink","rightWink","noseX","noseY"];
 
-/* Default CC numbers per gesture (sensible Live mapping) */
+/* ===== Global routed gesture (override) ===== */
+let routedGesture = "mouth";
+const routeGestureSelect = document.getElementById("routeGestureSelect");
+if (routeGestureSelect) {
+  routeGestureSelect.value = routedGesture;
+  routeGestureSelect.addEventListener("change", () => {
+    routedGesture = routeGestureSelect.value;
+    console.log("[console] routing gesture =", routedGesture);
+  });
+}
+
+/* ===== Default CC numbers per gesture ===== */
 const DEFAULT_CC_FOR_GESTURE = {
-  mouth:11,         // Expression
-  smile:1,          // Modulation
-  leftWink:74,      // Brightness
-  rightWink:71,     // Resonance
-  noseX:10,         // Pan
-  noseY:91          // Reverb
+  mouth:11,   // Expression
+  smile:1,    // Modulation
+  leftWink:74,// Brightness
+  rightWink:71,// Resonance
+  noseX:10,   // Pan
+  noseY:91    // Reverb
 };
 
-/* ===== DOM helpers ===== */
+/* ===== DOM helpers & state ===== */
 const el = id => document.getElementById(id);
 const $auth = el('auth'), $main = el('main'), $rack = el('rack');
 function clamp(v,min,max){ return Math.max(min,Math.min(max,v)); }
 
-/* ===== State ===== */
 let ws=null, wsConnected=false, pingTimer=null, lastPing=0;
 let sessionId="", password="", reconnectTimer=null, reconnectAttempts=0, shouldStayConnected=false;
 let participants = new Map();
@@ -160,9 +187,8 @@ function makePerformer(id, name){
   return {
     id, name, connected:true,
     assignedOutChannel:1, mute:false, solo:false, notesRoute:true,
-    // 1-note + 1-CC per performer config:
     noteSource:"mouth", velocitySource:"fixed", velocityFixed:100,
-    ccFallbackSource:"noseX", // used when no gesture Solo is selected
+    ccFallbackSource:"noseX",
     lastCCNumber: DEFAULT_CC_FOR_GESTURE["noseX"],
     gestures,
     lastNote:{on:false,note:60,vel:100},
@@ -177,7 +203,6 @@ function ensurePerf(id, name){
 function anySolo(){
   for(const p of participants.values()){
     if(p.solo) return true;
-    // gesture solos no longer gate notes; we use gesture solo only to PICK the CC source per performer.
   }
   return false;
 }
@@ -195,13 +220,15 @@ function notesRoutable(p){
 function ccRoutable(p){
   if (p.mute) return false;
   const solo = anySolo();
-  return solo ? p.solo : true; // CCs are allowed unless muted; single-source enforced below
+  return solo ? p.solo : true;
 }
 
 /* Choose CC source gesture for a performer:
-   - If any gesture on this performer has Solo ON, use the FIRST such gesture (stable pick).
-   - Otherwise, use ccFallbackSource (default noseX). */
+   - If global routedGesture is set, use it
+   - Else if any gesture has Solo, use the first such gesture
+   - Else fallback (noseX) */
 function pickCCSourceGesture(p){
+  if (routedGesture && ALL_GESTURES.includes(routedGesture)) return routedGesture;
   const sol = ALL_GESTURES.find(g => p.gestures[g]?.solo);
   return sol || p.ccFallbackSource || "noseX";
 }
@@ -222,9 +249,10 @@ function sendCC_Perf(p,val){
   if(!out) return;
   const g = pickCCSourceGesture(p);
   const ccNum = ccNumberForGesture(g);
-  // channelized CC per performer (Live MIDI Map ignores channel; channel filtering may be done via M4L)
   out.send([ st(0xB0, p.assignedOutChannel), clamp(ccNum,0,127), clamp(val,0,127) ]); tpOut++;
 }
+
+/* ===== Local monitor (Tone.js) ===== */
 async function ensureAudioNodes(p){
   if (typeof Tone === 'undefined') {
     console.warn('[Console] Tone.js not loaded yet; skipping local monitor init');
@@ -238,7 +266,6 @@ async function ensureAudioNodes(p){
   await swapInstrument(p, p.audio.instrument);
   p.audio.ready = true;
 }
-
 async function swapInstrument(p, name){
   p.audio.instrument = name;
   if(p.audio.sampler){ try{ p.audio.sampler.dispose(); }catch{} p.audio.sampler=null; }
@@ -255,7 +282,6 @@ function playLocal(p, note, vel, on){
 }
 
 /* ===== Render ===== */
-/* KEEPING renderCard UNTOUCHED (as requested) */
 function renderCard(p, fresh=false){
   let card = document.querySelector(`[data-id="${p.id}"]`);
   if(!card){
@@ -287,7 +313,7 @@ function renderCard(p, fresh=false){
 
       <div class="grid" style="grid-template-columns:1fr 1fr 1fr; gap:6px">
         ${ALL_GESTURES.map(g=>`
-          <div class="gbox">
+          <div class="gbox" data-gesture="${g}">
             <div class="gname"><span>${GESTURE_LABEL[g]}</span><span class="led" data-ledg="${g}"></span></div>
             <div class="meter"><div class="mbar ${p.gestures[g].route?'active':'inactive'}" data-bar="${g}" style="width:0%"></div></div>
             <div class="rowx">
@@ -303,13 +329,13 @@ function renderCard(p, fresh=false){
     $rack.appendChild(card);
 
     /* wire up */
-    const chSel = card.querySelector('[data-ch]');
-    const btnNotes = card.querySelector('[data-notes]');
-    const btnM = card.querySelector('[data-m]');
-    const btnS = card.querySelector('[data-s]');
-    const btnAudio = card.querySelector('[data-audio]');
-    const selIns = card.querySelector('[data-ins]');
-    const vol = card.querySelector('[data-vol]');
+    const chSel   = card.querySelector('[data-ch]');
+    const btnNotes= card.querySelector('[data-notes]');
+    const btnM    = card.querySelector('[data-m]');
+    const btnS    = card.querySelector('[data-s]');
+    const btnAudio= card.querySelector('[data-audio]');
+    const selIns  = card.querySelector('[data-ins]');
+    const vol     = card.querySelector('[data-vol]');
 
     chSel.value = p.assignedOutChannel;
     btnNotes.classList.toggle('active', p.notesRoute);
@@ -319,22 +345,22 @@ function renderCard(p, fresh=false){
     btnAudio.classList.toggle('active', p.audio.on);
     selIns.value = p.audio.instrument;
 
-    chSel.onchange = ()=>{ p.assignedOutChannel = parseInt(chSel.value,10)||1; };
+    chSel.onchange   = ()=>{ p.assignedOutChannel = parseInt(chSel.value,10)||1; };
     btnNotes.onclick = ()=>{ p.notesRoute=!p.notesRoute; btnNotes.classList.toggle('active',p.notesRoute); };
-    btnM.onclick = ()=>{ p.mute=!p.mute; btnM.classList.toggle('active',p.mute); };
-    btnS.onclick = ()=>{ p.solo=!p.solo; btnS.classList.toggle('active',p.solo); };
+    btnM.onclick     = ()=>{ p.mute=!p.mute; btnM.classList.toggle('active',p.mute); };
+    btnS.onclick     = ()=>{ p.solo=!p.solo; btnS.classList.toggle('active',p.solo); };
 
     btnAudio.onclick = async ()=>{
-  p.audio.on = !p.audio.on;
-  btnAudio.textContent = p.audio.on ? "ON" : "OFF";
-  btnAudio.classList.toggle('active', p.audio.on);
-  if (p.audio.on) {
-    await ensureAudioNodes(p);
-    if (typeof Tone !== 'undefined' && p.audio.gain) {
-      p.audio.gain.gain.setValueAtTime(p.audio.volume, Tone.now());
-    }
-  }
-};
+      p.audio.on = !p.audio.on;
+      btnAudio.textContent = p.audio.on ? "ON" : "OFF";
+      btnAudio.classList.toggle('active', p.audio.on);
+      if (p.audio.on) {
+        await ensureAudioNodes(p);
+        if (typeof Tone !== 'undefined' && p.audio.gain) {
+          p.audio.gain.gain.setValueAtTime(p.audio.volume, Tone.now());
+        }
+      }
+    };
 
     selIns.onchange = async ()=>{
       p.audio.instrument = selIns.value;
@@ -346,14 +372,14 @@ function renderCard(p, fresh=false){
     };
 
     ALL_GESTURES.forEach(g=>{
-      const r = card.querySelector(`[data-r="${g}"]`);
-      const gm= card.querySelector(`[data-gm="${g}"]`);
-      const gs= card.querySelector(`[data-gs="${g}"]`);
+      const r   = card.querySelector(`[data-r="${g}"]`);
+      const gm  = card.querySelector(`[data-gm="${g}"]`);
+      const gs  = card.querySelector(`[data-gs="${g}"]`);
       const bar = card.querySelector(`[data-bar="${g}"]`);
       r.classList.toggle('active', p.gestures[g].route);
       gm.classList.toggle('active', p.gestures[g].mute);
       gs.classList.toggle('active', p.gestures[g].solo);
-      r.onclick = ()=>{ p.gestures[g].route=!p.gestures[g].route; r.classList.toggle('active',p.gestures[g].route); bar.classList.toggle('active',p.gestures[g].route); bar.classList.toggle('inactive',!p.gestures[g].route); };
+      r.onclick  = ()=>{ p.gestures[g].route=!p.gestures[g].route; r.classList.toggle('active',p.gestures[g].route); bar.classList.toggle('active',p.gestures[g].route); bar.classList.toggle('inactive',!p.gestures[g].route); };
       gm.onclick = ()=>{ p.gestures[g].mute=!p.gestures[g].mute; gm.classList.toggle('active',p.gestures[g].mute); };
       gs.onclick = ()=>{ p.gestures[g].solo=!p.gestures[g].solo; gs.classList.toggle('active',p.gestures[g].solo); };
     });
@@ -374,6 +400,15 @@ function updateGestureUI(id,g,value){
   if(bar) bar.style.width = (clamp(value,0,127)/127*100)+'%';
   const vEl=card.querySelector(`[data-v="${g}"]`); if(vEl) vEl.textContent=clamp(value,0,127);
   const ledg=card.querySelector(`[data-ledg="${g}"]`); if(ledg){ ledg.className='led ok'; setTimeout(()=>ledg.className='led',80); }
+
+  // highlight whichever gesture is currently routed for this performer
+  const p = participants.get(id);
+  if (p) {
+    const active = pickCCSourceGesture(p);
+    card.querySelectorAll('.gbox[data-gesture]').forEach(el=>{
+      el.classList.toggle('active', el.getAttribute('data-gesture') === active);
+    });
+  }
 }
 
 /* ===== Message handling (host side) ===== */
@@ -393,19 +428,17 @@ function handleRelayMessage(m){
       p.connected=true; if(d.channel) p.assignedOutChannel=d.channel; renderCard(p,true); updateCount(); return;
     }
     case "session/left": {
-  const d = m.data || {};
-  const p = participants.get(d.participant_id);
-  if (p) {
-    participants.delete(d.participant_id);
-    const card = document.querySelector(`[data-id="${d.participant_id}"]`);
-    if (card && card.parentNode) card.parentNode.removeChild(card);
-  }
-  updateCount();
-  return;
-}
+      const d = m.data || {};
+      const p = participants.get(d.participant_id);
+      if (p) {
+        participants.delete(d.participant_id);
+        const card = document.querySelector(`[data-id="${d.participant_id}"]`);
+        if (card && card.parentNode) card.parentNode.removeChild(card);
+      }
+      updateCount();
+      return;
+    }
 
-
-    /* CC in from devices: drive UI always; route ONLY one CC source per performer (gesture with Solo ON, else ccFallbackSource). */
     case "midi/cc": {
       const d=m.data||{}; const p=ensurePerf(d.from,d.name);
       const gkey = d.name && ALL_GESTURES.includes(d.name) ? d.name : GESTURE_FROM_CH[d.channel];
@@ -413,10 +446,10 @@ function handleRelayMessage(m){
         const val = d.value|0;
         p.gestures[gkey].value = val;
         p.lastGesture = gkey;
-        renderCard(p); // updates "Last" badge
+        renderCard(p);
         updateGestureUI(p.id,gkey,val);
 
-        // Single-CC-per-performer routing
+        // route only from the picked CC source for this performer
         if (ccRoutable(p)){
           const src = pickCCSourceGesture(p);
           if (src === gkey) sendCC_Perf(p, val);
@@ -425,12 +458,10 @@ function handleRelayMessage(m){
       return;
     }
 
-    /* Pure gesture updates: always drive UI; also pipe into note logic if used as note source */
     case "gesture/update": {
       const d=m.data||{}; const p=ensurePerf(d.from,d.name);
       const gkey=d.name; if(ALL_GESTURES.includes(gkey)){
         const val=d.value|0; p.gestures[gkey].value=val; p.lastGesture=gkey; renderCard(p); updateGestureUI(p.id,gkey,val);
-        // If you later add gesture->note generation, you could trigger here.
       }
       return;
     }
@@ -440,7 +471,6 @@ function handleRelayMessage(m){
       const note=d.note|0, vel=(d.vel|0)||100;
       p.lastNote={on:true,note,vel}; noteLED(p.id,true);
       if(notesRoutable(p)) sendNote(true,note,vel,p.assignedOutChannel);
-      // local monitor
       if(p.audio.on){ ensureAudioNodes(p).then(()=> playLocal(p,note,vel,true)); }
       return;
     }
@@ -518,7 +548,7 @@ function buildOuts(){
   selCC.onchange   =()=>{ ccOutId    = selCC.value    || null; };
 }
 
-/* Buttons */
+/* ===== Buttons ===== */
 el('ping').onclick = ()=>{
   if(!notesOutId){ setStatus('Select Notes Out'); return; }
   sendNote(true,60,100,1); setTimeout(()=>sendNote(false,60,0,1),120);
@@ -534,7 +564,7 @@ el('panic').onclick= ()=>{
   setStatus('panic sent');
 };
 
-/* ===== Wireframe ===== */
+/* ===== Wire-up ===== */
 el('join').onclick = ()=>{
   sessionId = el('sid').value.trim() || Math.random().toString(36).slice(2,8);
   password  = el('pwd').value;
