@@ -70,6 +70,7 @@ header{padding:10px 12px;border-bottom:1px solid var(--line);display:flex;align-
       <div><div class="k">Username</div><input id="hostUser" placeholder="admin" /></div>
       <div><div class="k">Password</div><input id="hostPass" type="password" placeholder="••••••••" /></div>
     </div>
+    <div id="authStatus" class="small" style="margin-top:8px">ready</div>
     <div class="row" style="margin-top:10px">
       <div class="grow"></div><button id="loginHostBtn" class="btn">SIGN IN</button>
     </div>
@@ -221,7 +222,12 @@ setInterval(()=>{ el('tpIn').textContent=tpIn; el('tpOut').textContent=tpOut; tp
 /* ===== UI bits ===== */
 function setWS(state){ wsConnected=(state==='connected'); el('kvWS').textContent=state; el('ledWS').className='led '+(state==='connected'?'ok':state==='connecting'?'warn':state==='error'?'bad':''); }
 function setRTT(ms){ el('kvRTT').textContent=ms?((ms|0)+' ms'):'—'; }
-function setStatus(s){ el('status').textContent=s; }
+function setStatus(s){
+  const mainStatus = el('status');
+  if(mainStatus) mainStatus.textContent=s;
+  const authStatus = el('authStatus');
+  if(authStatus) authStatus.textContent=s;
+}
 function updateCount(){
   const fromState = [...participants.values()].filter(p=>p.connected).length;
   const fromDom   = document.querySelectorAll('#rack [data-id]').length;
