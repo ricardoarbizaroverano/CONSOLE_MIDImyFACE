@@ -1,0 +1,16 @@
+{
+	"folders": [
+		{
+			"path": "../../MIDImyFACE"
+		},
+		{
+			"path": "../../midimyface-relay"
+		},
+		{
+			"path": ".."
+		}
+	],
+	"settings": {
+		"terminal.integrated.accessibleViewFocusOnCommandExecution": true
+	}
+}

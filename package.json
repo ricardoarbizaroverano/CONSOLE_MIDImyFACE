@@ -4,7 +4,8 @@
   "main": "server.js",
   "version": "1.0.0",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test:phase1": "zsh ./scripts/phase1-local-test.sh"
   },
   "dependencies": {
     "ws": "^8.18.0"

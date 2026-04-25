@@ -62,14 +62,56 @@ header{padding:10px 12px;border-bottom:1px solid var(--line);display:flex;align-
   <div class="kv"><span class="k">RTT</span><span id="kvRTT" class="v small">—</span></div>
 </header>
 
-<!-- AUTH -->
+<!-- HOST LOGIN + SESSION SETUP -->
 <section id="auth" class="wrap center box" style="padding:12px">
-  <div class="grid" style="grid-template-columns:1fr 1fr">
-    <div><div class="k">Session ID</div><input id="sid" placeholder="e.g. abc123" /></div>
-    <div><div class="k">Password</div><input id="pwd" type="password" placeholder="optional" /></div>
+  <div id="loginBox">
+    <div class="k" style="margin-bottom:8px">Host Sign In</div>
+    <div class="grid" style="grid-template-columns:1fr 1fr">
+      <div><div class="k">Username</div><input id="hostUser" placeholder="admin" /></div>
+      <div><div class="k">Password</div><input id="hostPass" type="password" placeholder="••••••••" /></div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <div class="grow"></div><button id="loginHostBtn" class="btn">SIGN IN</button>
+    </div>
   </div>
-  <div class="row" style="margin-top:10px">
-    <div class="grow"></div><button id="join" class="btn">JOIN NOW</button>
+
+  <div id="sessionSetupBox" class="hidden">
+    <div class="k" style="margin-bottom:8px">Create Session</div>
+    <div class="grid" style="grid-template-columns:1fr 1fr">
+      <div>
+        <div class="k">Session Password (optional)</div>
+        <input id="newSessionPassword" type="password" placeholder="auto-generate if empty" />
+      </div>
+      <div>
+        <div class="k">Participant Limit (tier)</div>
+        <select id="newSessionMax">
+          <option value="5">Up to 5</option>
+          <option value="10" selected>Up to 10</option>
+          <option value="25">Up to 25</option>
+          <option value="50">Up to 50</option>
+        </select>
+      </div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button id="createSessionBtn" class="btn">CREATE SESSION</button>
+    </div>
+    <div id="createdSessionBox" class="hidden" style="margin-top:10px">
+      <div class="gbox">
+        <div class="row" style="margin-bottom:8px">
+          <div class="kv"><span class="k">Session ID</span><span id="createdSid" class="v">—</span></div>
+          <div class="kv"><span class="k">Password</span><span id="createdPwd" class="v">—</span></div>
+          <div class="kv"><span class="k">Limit</span><span id="createdMax" class="v">—</span></div>
+        </div>
+        <div class="row" style="margin-bottom:8px">
+          <input id="inviteLinkOutput" class="grow" readonly />
+          <button id="copyInviteBtn" class="btn mini">COPY LINK</button>
+          <button id="copyCredsBtn" class="btn mini">COPY SID+PASS</button>
+        </div>
+        <div class="row">
+          <button id="connectHostBtn" class="btn">CONNECT AS HOST</button>
+        </div>
+      </div>
+    </div>
   </div>
 </section>
 
@@ -119,6 +161,8 @@ header{padding:10px 12px;border-bottom:1px solid var(--line);display:flex;align-
 const RELAY_URL_DEFAULT = "wss://midimyface-relay.onrender.com/ws";
 const qs = new URLSearchParams(location.search);
 const RELAY_URL = qs.get('ws') || localStorage.getItem('relayURL') || RELAY_URL_DEFAULT;
+const CONSOLE_API_BASE_DEFAULT = "https://midimyface-relay.onrender.com";
+const CONSOLE_API_BASE = qs.get('console_api') || localStorage.getItem('consoleAPI') || CONSOLE_API_BASE_DEFAULT;
 
 /* ===== Instruments for local monitor (very light) ===== */
 const INSTRUMENTS = {
@@ -164,11 +208,14 @@ const $auth = el('auth'), $main = el('main'), $rack = el('rack');
 function clamp(v,min,max){ return Math.max(min,Math.min(max,v)); }
 
 let ws=null, wsConnected=false, pingTimer=null, lastPing=0;
-let sessionId="", password="", reconnectTimer=null, reconnectAttempts=0, shouldStayConnected=false;
+let sessionId="", password="", hostJoinToken="", reconnectTimer=null, reconnectAttempts=0, shouldStayConnected=false;
 let participants = new Map();
 let midi=null;
 let notesOutId=null, ccOutId=null;
 let tpIn=0, tpOut=0;
+let hostAuthToken = localStorage.getItem('mmf_console_host_auth') || "";
+let hostProfile = null;
+let createdInviteLink = "";
 setInterval(()=>{ el('tpIn').textContent=tpIn; el('tpOut').textContent=tpOut; tpIn=0; tpOut=0; },1000);
 
 /* ===== UI bits ===== */
@@ -179,6 +226,74 @@ function updateCount(){
   const fromState = [...participants.values()].filter(p=>p.connected).length;
   const fromDom   = document.querySelectorAll('#rack [data-id]').length;
   el('kvCount').textContent = Math.max(fromState, fromDom);
+}
+
+async function apiPost(path, payload, useAuth = false){
+  const headers = { 'Content-Type': 'application/json' };
+  if(useAuth && hostAuthToken) headers.Authorization = `Bearer ${hostAuthToken}`;
+  const res = await fetch(`${CONSOLE_API_BASE}${path}`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(payload || {})
+  });
+  const data = await res.json().catch(()=>({ ok:false, error:'invalid_response' }));
+  if(!res.ok || !data.ok) throw new Error(data.error || `http_${res.status}`);
+  return data;
+}
+
+function showSessionSetup(){
+  el('loginBox').classList.add('hidden');
+  el('sessionSetupBox').classList.remove('hidden');
+}
+
+function showCreatedSession(session){
+  sessionId = session.session_id;
+  password = session.session_password;
+  hostJoinToken = session.host_join_token || '';
+  createdInviteLink = session.invite_url || '';
+  el('createdSid').textContent = session.session_id || '—';
+  el('createdPwd').textContent = session.session_password || '—';
+  el('createdMax').textContent = String(session.max_participants || '—');
+  el('inviteLinkOutput').value = createdInviteLink || '';
+  el('createdSessionBox').classList.remove('hidden');
+  el('kvSession').textContent = sessionId || '—';
+}
+
+function copyToClipboard(text){
+  if(!text) return;
+  navigator.clipboard?.writeText(text).catch(()=>{});
+}
+
+async function loginHost(){
+  const username = (el('hostUser').value || '').trim();
+  const userPass = el('hostPass').value || '';
+  if(!username || !userPass){ setStatus('username/password required'); return; }
+  try{
+    const result = await apiPost('/api/auth/login', { username, password: userPass }, false);
+    hostAuthToken = result.token;
+    hostProfile = result.user;
+    localStorage.setItem('mmf_console_host_auth', hostAuthToken);
+    showSessionSetup();
+    setStatus(`signed in as ${hostProfile.username}`);
+  }catch(err){
+    setStatus(`login failed: ${err.message}`);
+  }
+}
+
+async function createSession(){
+  if(!hostAuthToken){ setStatus('sign in first'); return; }
+  const maxParticipants = Number(el('newSessionMax').value || 10);
+  const sessionPassword = (el('newSessionPassword').value || '').trim();
+  try{
+    const result = await apiPost('/api/sessions/create', {
+      max_participants: maxParticipants,
+      session_password: sessionPassword || undefined
+    }, true);
+    showCreatedSession(result.session);
+    setStatus('session created');
+  }catch(err){
+    setStatus(`create failed: ${err.message}`);
+  }
 }
 
 /* ===== Model ===== */
@@ -502,7 +617,14 @@ function connectWS(){
 
   ws.onopen = ()=>{
     setWS('connected'); setRTT(null); reconnectAttempts=0; clearTimeout(reconnectTimer);
-    ws.send(JSON.stringify({ type:"hello", session_id:sessionId, password:password||"", role:"host", name:"Console", client_uuid:null }));
+    ws.send(JSON.stringify({
+      type:"hello",
+      session_id:sessionId,
+      role:"host",
+      name: hostProfile?.username ? `Host:${hostProfile.username}` : "Console",
+      client_uuid:null,
+      join_token: hostJoinToken || ""
+    }));
     clearInterval(pingTimer);
     pingTimer=setInterval(()=>{ lastPing=performance.now(); try{ ws.send(JSON.stringify({type:"system/ping",data:{t:Date.now()}})); }catch{} },5000);
   };
@@ -565,14 +687,32 @@ el('panic').onclick= ()=>{
 };
 
 /* ===== Wire-up ===== */
-el('join').onclick = ()=>{
-  sessionId = el('sid').value.trim() || Math.random().toString(36).slice(2,8);
-  password  = el('pwd').value;
-  el('kvSession').textContent = sessionId;
-  $auth.classList.add('hidden'); $main.classList.remove('hidden');
+el('loginHostBtn').onclick = loginHost;
+el('createSessionBtn').onclick = createSession;
+
+el('copyInviteBtn').onclick = ()=>{
+  copyToClipboard(createdInviteLink);
+  setStatus('invite link copied');
+};
+
+el('copyCredsBtn').onclick = ()=>{
+  copyToClipboard(`Session ID: ${sessionId}\nPassword: ${password}`);
+  setStatus('session credentials copied');
+};
+
+el('connectHostBtn').onclick = ()=>{
+  if(!sessionId || !hostJoinToken){ setStatus('create session first'); return; }
+  $auth.classList.add('hidden');
+  $main.classList.remove('hidden');
   shouldStayConnected = true;
   connectWS();
 };
+
+if(hostAuthToken){
+  showSessionSetup();
+  setStatus('restored host sign-in token');
+}
+
 midiInit();
 </script>
 </body>
