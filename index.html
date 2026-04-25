@@ -144,6 +144,18 @@ header{padding:10px 12px;border-bottom:1px solid var(--line);display:flex;align-
     </div>
   </div>
 
+  <div class="box" style="padding:8px; margin-top:10px">
+    <div class="row" style="margin-bottom:8px">
+      <div class="kv"><span class="k">Invite</span><span id="inviteHint" class="v small">Copy the link and send it to participants</span></div>
+      <div class="grow"></div>
+      <button id="copyInviteMainBtn" class="btn mini">COPY INVITE LINK</button>
+    </div>
+    <div class="row" style="margin-bottom:6px">
+      <input id="inviteLinkMainOutput" class="grow" readonly placeholder="Create a session to generate invite link" />
+    </div>
+    <div id="inviteCopiedStatus" class="small">Invitation copied to clipboard will appear here.</div>
+  </div>
+
   <div class="hr"></div>
   <div id="warn" class="warnbar hidden">Web MIDI unavailable. Use Chrome/Edge and select a virtual MIDI port (IAC / loopMIDI).</div>
   <div id="rack" class="rack"></div>
@@ -261,6 +273,8 @@ function showCreatedSession(session){
   el('createdPwd').textContent = session.session_password || '—';
   el('createdMax').textContent = String(session.max_participants || '—');
   el('inviteLinkOutput').value = createdInviteLink || '';
+  if(el('inviteLinkMainOutput')) el('inviteLinkMainOutput').value = createdInviteLink || '';
+  if(el('inviteCopiedStatus')) el('inviteCopiedStatus').textContent = createdInviteLink ? 'Invite ready — copy and share this link with performers.' : 'Create a session to generate invite link.';
   el('createdSessionBox').classList.remove('hidden');
   el('kvSession').textContent = sessionId || '—';
 }
@@ -268,6 +282,12 @@ function showCreatedSession(session){
 function copyToClipboard(text){
   if(!text) return;
   navigator.clipboard?.writeText(text).catch(()=>{});
+}
+
+function flashInviteCopied(message){
+  const inviteStatus = el('inviteCopiedStatus');
+  if(inviteStatus) inviteStatus.textContent = message;
+  setStatus(message);
 }
 
 async function loginHost(){
@@ -699,7 +719,13 @@ el('createSessionBtn').onclick = createSession;
 
 el('copyInviteBtn').onclick = ()=>{
   copyToClipboard(createdInviteLink);
-  setStatus('invite link copied');
+  flashInviteCopied('Invitation copied to clipboard. Send it like a Zoom invite.');
+};
+
+el('copyInviteMainBtn').onclick = ()=>{
+  if(!createdInviteLink){ flashInviteCopied('Create a session first to generate the invite link.'); return; }
+  copyToClipboard(createdInviteLink);
+  flashInviteCopied('Invitation copied to clipboard. Send it like a Zoom invite.');
 };
 
 el('copyCredsBtn').onclick = ()=>{
