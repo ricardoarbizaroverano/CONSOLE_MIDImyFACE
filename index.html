@@ -561,10 +561,11 @@ function handleRelayMessage(m){
     }
 
     case "midi/cc": {
-      const d=m.data||{}; const p=ensurePerf(d.from,d.name);
-      const gkey = d.name && ALL_GESTURES.includes(d.name) ? d.name : GESTURE_FROM_CH[d.channel];
+      const d=m.data||{}; const p=ensurePerf(d.from,d.performer_name||d.name);
+      const payloadGesture = d.name || d.gesture;
+      const gkey = payloadGesture && ALL_GESTURES.includes(payloadGesture) ? payloadGesture : GESTURE_FROM_CH[d.channel];
       if(gkey){
-        const val = d.value|0;
+        const val = Number(d.value)|0;
         p.gestures[gkey].value = val;
         p.lastGesture = gkey;
         renderCard(p);
@@ -580,24 +581,24 @@ function handleRelayMessage(m){
     }
 
     case "gesture/update": {
-      const d=m.data||{}; const p=ensurePerf(d.from,d.name);
-      const gkey=d.name; if(ALL_GESTURES.includes(gkey)){
-        const val=d.value|0; p.gestures[gkey].value=val; p.lastGesture=gkey; renderCard(p); updateGestureUI(p.id,gkey,val);
+      const d=m.data||{}; const p=ensurePerf(d.from,d.performer_name||d.name);
+      const gkey=d.name||d.gesture; if(ALL_GESTURES.includes(gkey)){
+        const val=Number(d.value)|0; p.gestures[gkey].value=val; p.lastGesture=gkey; renderCard(p); updateGestureUI(p.id,gkey,val);
       }
       return;
     }
 
     case "midi/note_on": {
-      const d=m.data||{}; const p=ensurePerf(d.from,d.name);
-      const note=d.note|0, vel=(d.vel|0)||100;
+      const d=m.data||{}; const p=ensurePerf(d.from,d.performer_name||d.name);
+      const note=Number(d.note)|0, vel=(Number(d.vel ?? d.velocity)|0)||100;
       p.lastNote={on:true,note,vel}; noteLED(p.id,true);
       if(notesRoutable(p)) sendNote(true,note,vel,p.assignedOutChannel);
       if(p.audio.on){ ensureAudioNodes(p).then(()=> playLocal(p,note,vel,true)); }
       return;
     }
     case "midi/note_off": {
-      const d=m.data||{}; const p=ensurePerf(d.from,d.name);
-      const note=d.note|0, vel=(d.vel|0)||0;
+      const d=m.data||{}; const p=ensurePerf(d.from,d.performer_name||d.name);
+      const note=Number(d.note)|0, vel=(Number(d.vel ?? d.velocity)|0)||0;
       noteLED(p.id,false);
       if(notesRoutable(p)) sendNote(false,note,vel,p.assignedOutChannel);
       if(p.audio.on){ playLocal(p,note,vel,false); }
